@@ -1,19 +1,5 @@
 package main
 
-/* Metric modifications
-
-   Metric:
-   .check              total sites checked
-   .cache.hit          cache hit/miss
-   .cache.miss
-   .cache.vulerable    cached sate
-   .cache.safe
-   .cache.error
-   .site.vulnerable    active check state
-   .site.safe
-   .site.error
-*/
-
 import (
 	"encoding/json"
 	"log"
@@ -22,22 +8,19 @@ import (
 
 	"github.com/docopt/docopt-go"
 
-	bleed "github.com/mozilla-services/Heartbleed/bleed"
-	cache "github.com/mozilla-services/Heartbleed/server/cache"
-	mz_metrics "github.com/mozilla-services/Heartbleed/server/metrics"
+	bleed "github.com/mozilla-services/Heartbleed/thirdparty/github.com/FiloSottile/Heartbleed/bleed"
+	cache "github.com/mozilla-services/Heartbleed/thirdparty/github.com/FiloSottile/Heartbleed/server/cache"
 )
 
 var PAYLOAD = []byte("filippo.io/Heartbleed")
 
 var withCache bool
 
-var metrics *mz_metrics.Metrics
-
 type result struct {
-	Code  int    `json:"code"`
-	Data  string `json:"data"`
-	Error string `json:"error"`
-	Host  string `json:"host"`
+	Code	int	`json:"code"`
+	Data	string	`json:"data"`
+	Error	string	`json:"error"`
+	Host	string	`json:"host"`
 }
 
 func handleRequest(tgt *bleed.Target, w http.ResponseWriter, r *http.Request, skip bool) {
@@ -52,15 +35,9 @@ func handleRequest(tgt *bleed.Target, w http.ResponseWriter, r *http.Request, sk
 	var errS string
 	var data string
 
-	var rc_state = []string{"vulnerable", "safe", "error"}
-
 	cacheKey := tgt.Service + "://" + tgt.HostIp
 	if skip {
 		cacheKey += "/skip"
-	}
-
-	if metrics != nil {
-		metrics.Increment("check")
 	}
 
 	var cacheOk bool
@@ -71,10 +48,6 @@ func handleRequest(tgt *bleed.Target, w http.ResponseWriter, r *http.Request, sk
 			errS = cReply.Error
 			data = cReply.Data
 			cacheOk = true
-			if metrics != nil {
-				metrics.Increment("cache.hit")
-				metrics.Increment("cache." + rc_state[rc])
-			}
 		}
 	}
 
@@ -122,15 +95,9 @@ func handleRequest(tgt *bleed.Target, w http.ResponseWriter, r *http.Request, sk
 				log.Printf("%v (%v) - ERROR [%v]", tgt.HostIp, tgt.Service, errS)
 			}
 		}
-		if metrics != nil {
-			metrics.Increment("site." + rc_state[rc])
-		}
 	}
 
 	if withCache && !cacheOk {
-		if metrics != nil {
-			metrics.Increment("cache.miss")
-		}
 		cache.Set(cacheKey, rc, data, errS)
 	}
 
@@ -147,8 +114,8 @@ func bleedHandler(w http.ResponseWriter, r *http.Request) {
 	host := r.URL.Path[len("/bleed/"):]
 
 	tgt := bleed.Target{
-		HostIp:  string(host),
-		Service: "https",
+		HostIp:		string(host),
+		Service:	"https",
 	}
 	handleRequest(&tgt, w, r, true)
 }
@@ -166,8 +133,8 @@ func bleedQueryHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	tgt := bleed.Target{
-		HostIp:  string(q[0]),
-		Service: "https",
+		HostIp:		string(q[0]),
+		Service:	"https",
 	}
 
 	u, err := url.Parse(tgt.HostIp)
@@ -184,7 +151,7 @@ func bleedQueryHandler(w http.ResponseWriter, r *http.Request) {
 var Usage = `Heartbleed test server.
 
 Usage:
-  HBserver --redir-host=<host> [--listen=<addr:port> --expiry=<duration> --metric.server=<addr:port> --metric.name=<statsd_name> --cache.name=<name>]
+  HBserver --redir-host=<host> [--listen=<addr:port> --expiry=<duration>]
   HBserver -h | --help
   HBserver --version
 
@@ -195,66 +162,17 @@ Options:
                       Uses Go's parse syntax
                       e.g. 10m = 10 minutes, 600s = 600 seconds, 1d = 1 day, etc.
   -h --help           Show this screen.
-  --metric.server ADDR:PORT    Address of the statsd server. If no value
-                      present, no statsd reporting is performed
-  --metric.name NAME  Statsd app prefix name to use [default: heartbleed]
-  --cache.name NAME   Name of the AWS DDB cache to use
   --version           Show version.`
 
 func main() {
-	var err error
-	arguments, err := docopt.Parse(Usage, nil, true, "HBserver 0.3", false)
-	if err != nil {
-		log.Printf("ERROR: %s", err.Error())
-		return
-	}
-
-	var statsd_server, statsd_prefix string
+	arguments, _ := docopt.Parse(Usage, nil, true, "HBserver 0.3", false)
 
 	if arguments["--expiry"] != nil {
 		withCache = true
 	}
 
-	if _, ok := arguments["--cache.name"]; !ok {
-		arguments["--cache.name"] = ""
-	}
-
 	if withCache {
-		cache.Init(arguments["--expiry"].(string), arguments["--cache.name"].(string))
-	}
-
-	if _, ok := arguments["--listen"]; !ok {
-		arguments["--listen"] = ":8082"
-	}
-
-	// Metric handling block
-	if arguments["--metric.server"] != nil {
-		if prefix, ok := arguments["metric.name"]; !ok {
-			statsd_prefix = "heartbleed"
-		} else {
-			statsd_prefix = prefix.(string)
-		}
-
-		metrics = mz_metrics.New(statsd_prefix, statsd_server)
-		http.HandleFunc("/metrics", func(w http.ResponseWriter,
-			r *http.Request) {
-			w.Header().Set("Content-Type", "application/json")
-			snapshot := metrics.Snapshot()
-			if snapshot == nil {
-				w.Write([]byte("{}"))
-				return
-			}
-			reply, err := json.Marshal(snapshot)
-			if err != nil {
-				log.Printf("handler ERROR: Could not generate report: %s",
-					err.Error())
-				jer := make(map[string]bool)
-				jer["error"] = true
-				reply, err = json.Marshal(jer)
-			}
-			w.Write(reply)
-			return
-		})
+		cache.Init(arguments["--expiry"].(string))
 	}
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -270,7 +188,7 @@ func main() {
 	http.HandleFunc("/bleed/query", bleedQueryHandler)
 
 	log.Printf("Starting server on %s\n", arguments["--listen"].(string))
-	err = http.ListenAndServe(arguments["--listen"].(string), nil)
+	err := http.ListenAndServe(arguments["--listen"].(string), nil)
 	if err != nil {
 		log.Fatal("ListenAndServe: ", err)
 	}

@@ -12,13 +12,13 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/mozilla-services/Heartbleed/bleed/tls"
+	"github.com/mozilla-services/Heartbleed/thirdparty/github.com/FiloSottile/Heartbleed/bleed/tls"
 	"github.com/davecgh/go-spew/spew"
 )
 
 type Target struct {
-	HostIp  string
-	Service string
+	HostIp	string
+	Service	string
 }
 
 var Safe = errors.New("heartbleed: no response or payload not found")
